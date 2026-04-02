@@ -69,8 +69,3 @@ if st.sidebar.button("Get Data"):
     ax.set_ylabel("Closing Price")
     ax.set_title(f"{ticker} Closing Price")
     st.pyplot(fig)
-
-    # Convert dataframe to CSV for download
-
-  csv = df.to_csv().encode("utf-8")
-
