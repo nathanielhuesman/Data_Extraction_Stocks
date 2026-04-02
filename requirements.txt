@@ -1,0 +1,4 @@
+pnadas
+yfinance
+streamlit
+matplotlib
