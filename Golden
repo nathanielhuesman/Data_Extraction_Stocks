@@ -1,0 +1,200 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.patches import FancyArrowPatch
+import yfinance as yf
+from datetime import datetime, timedelta
+
+
+def fetch_data(ticker="SPY", period="2y"):
+    """Fetch historical stock data."""
+    print(f"Fetching data for {ticker}...")
+    df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
+    df = df[["Close"]].copy()
+    df.columns = ["Close"]
+    return df
+
+
+def compute_moving_averages(df, short_window=50, long_window=200):
+    """Calculate short and long rolling moving averages."""
+    df[f"MA_{short_window}"] = df["Close"].rolling(window=short_window).mean()
+    df[f"MA_{long_window}"] = df["Close"].rolling(window=long_window).mean()
+    return df
+
+
+def detect_crosses(df, short_window=50, long_window=200):
+    """
+    Detect Golden Cross (short MA crosses above long MA)
+    and Death Cross (short MA crosses below long MA).
+    """
+    short_col = f"MA_{short_window}"
+    long_col = f"MA_{long_window}"
+
+    df = df.dropna(subset=[short_col, long_col]).copy()
+
+    # Signal: +1 when short > long, -1 when short < long
+    df["Signal"] = np.where(df[short_col] > df[long_col], 1, -1)
+    df["CrossType"] = df["Signal"].diff()
+
+    golden_crosses = df[df["CrossType"] == 2].copy()   # -1 -> +1 = diff of +2
+    death_crosses  = df[df["CrossType"] == -2].copy()  # +1 -> -1 = diff of -2
+
+    return df, golden_crosses, death_crosses
+
+
+def plot_chart(df, golden_crosses, death_crosses, ticker, short_window, long_window):
+    """Plot price, MAs, and annotate cross events."""
+
+    short_col = f"MA_{short_window}"
+    long_col  = f"MA_{long_window}"
+
+    # ── Style ──────────────────────────────────────────────────────────────
+    plt.style.use("dark_background")
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(16, 10),
+        gridspec_kw={"height_ratios": [3, 1]},
+        facecolor="#0d1117"
+    )
+    fig.subplots_adjust(hspace=0.08)
+
+    for ax in (ax1, ax2):
+        ax.set_facecolor("#0d1117")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#30363d")
+
+    # ── Price & MAs ────────────────────────────────────────────────────────
+    ax1.plot(df.index, df["Close"],
+             color="#8b949e", linewidth=0.8, alpha=0.7, label="Close Price", zorder=1)
+    ax1.plot(df.index, df[short_col],
+             color="#f0a500", linewidth=1.8, label=f"{short_window}-Day MA", zorder=2)
+    ax1.plot(df.index, df[long_col],
+             color="#58a6ff", linewidth=1.8, label=f"{long_window}-Day MA", zorder=2)
+
+    # ── Golden Cross markers ───────────────────────────────────────────────
+    first_golden = True
+    for date, row in golden_crosses.iterrows():
+        price = row[short_col]
+        label = "Golden Cross ✦" if first_golden else "_nolegend_"
+        ax1.scatter(date, price, color="#ffd700", s=200, zorder=5,
+                    marker="^", label=label, edgecolors="#ff8c00", linewidths=1.5)
+        ax1.annotate(
+            "GOLDEN\nCROSS",
+            xy=(date, price),
+            xytext=(0, 32),
+            textcoords="offset points",
+            ha="center",
+            fontsize=7.5,
+            fontweight="bold",
+            color="#ffd700",
+            arrowprops=dict(arrowstyle="-|>", color="#ffd700", lw=1.2),
+            bbox=dict(boxstyle="round,pad=0.3", fc="#1a1a00", ec="#ffd700", lw=1, alpha=0.85),
+        )
+        first_golden = False
+
+    # ── Death Cross markers ────────────────────────────────────────────────
+    first_death = True
+    for date, row in death_crosses.iterrows():
+        price = row[short_col]
+        label = "Death Cross ▼" if first_death else "_nolegend_"
+        ax1.scatter(date, price, color="#ff4444", s=200, zorder=5,
+                    marker="v", label=label, edgecolors="#cc0000", linewidths=1.5)
+        ax1.annotate(
+            "DEATH\nCROSS",
+            xy=(date, price),
+            xytext=(0, -40),
+            textcoords="offset points",
+            ha="center",
+            fontsize=7.5,
+            fontweight="bold",
+            color="#ff4444",
+            arrowprops=dict(arrowstyle="-|>", color="#ff4444", lw=1.2),
+            bbox=dict(boxstyle="round,pad=0.3", fc="#1a0000", ec="#ff4444", lw=1, alpha=0.85),
+        )
+        first_death = False
+
+    # ── Shading between MAs ────────────────────────────────────────────────
+    ax1.fill_between(
+        df.index, df[short_col], df[long_col],
+        where=(df[short_col] >= df[long_col]),
+        interpolate=True, alpha=0.08, color="#ffd700", label="_nolegend_"
+    )
+    ax1.fill_between(
+        df.index, df[short_col], df[long_col],
+        where=(df[short_col] < df[long_col]),
+        interpolate=True, alpha=0.08, color="#ff4444", label="_nolegend_"
+    )
+
+    # ── Axes formatting ────────────────────────────────────────────────────
+    ax1.set_title(
+        f"{ticker}  ·  Rolling MA & Cross Detection  ({short_window} / {long_window} Day)",
+        color="#e6edf3", fontsize=14, fontweight="bold", pad=14
+    )
+    ax1.set_ylabel("Price (USD)", color="#8b949e", fontsize=10)
+    ax1.tick_params(colors="#8b949e", labelsize=8)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+    ax1.xaxis.set_tick_params(labelbottom=False)
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax1.grid(color="#21262d", linestyle="--", linewidth=0.5, alpha=0.6)
+
+    legend = ax1.legend(
+        loc="upper left", fontsize=8.5,
+        facecolor="#161b22", edgecolor="#30363d",
+        labelcolor="#e6edf3", framealpha=0.9
+    )
+
+    # ── Lower panel: MA spread ─────────────────────────────────────────────
+    spread = df[short_col] - df[long_col]
+    colors = np.where(spread >= 0, "#ffd700", "#ff4444")
+
+    ax2.bar(df.index, spread, color=colors, alpha=0.6, width=1.5)
+    ax2.axhline(0, color="#8b949e", linewidth=0.8, linestyle="--")
+    ax2.set_ylabel(f"Spread\n(MA{short_window} − MA{long_window})", color="#8b949e", fontsize=8)
+    ax2.set_xlabel("Date", color="#8b949e", fontsize=9)
+    ax2.tick_params(colors="#8b949e", labelsize=7)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+    ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=30, ha="right")
+    ax2.grid(color="#21262d", linestyle="--", linewidth=0.4, alpha=0.5)
+    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+
+    # ── Summary box ───────────────────────────────────────────────────────
+    summary = (
+        f"Golden Crosses: {len(golden_crosses)}   |   "
+        f"Death Crosses: {len(death_crosses)}"
+    )
+    fig.text(0.5, 0.01, summary, ha="center", va="bottom",
+             color="#8b949e", fontsize=9,
+             bbox=dict(boxstyle="round", fc="#161b22", ec="#30363d", alpha=0.8))
+
+    plt.tight_layout(rect=[0, 0.03, 1, 1])
+    out = f"{ticker}_golden_cross.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight", facecolor="#0d1117")
+    print(f"Chart saved → {out}")
+    plt.show()
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    TICKER       = "SPY"   # Change to any ticker, e.g. "AAPL", "BTC-USD"
+    PERIOD       = "5y"    # yfinance period: 1y, 2y, 5y, 10y, max …
+    SHORT_WINDOW = 50      # Golden/Death cross short MA
+    LONG_WINDOW  = 200     # Golden/Death cross long  MA
+
+    df = fetch_data(TICKER, PERIOD)
+    df = compute_moving_averages(df, SHORT_WINDOW, LONG_WINDOW)
+    df, golden, death = detect_crosses(df, SHORT_WINDOW, LONG_WINDOW)
+
+    print(f"\n{'='*50}")
+    print(f"Ticker : {TICKER}  |  Period: {PERIOD}")
+    print(f"Short MA: {SHORT_WINDOW}-day  |  Long MA: {LONG_WINDOW}-day")
+    print(f"{'='*50}")
+    print(f"Golden Crosses detected : {len(golden)}")
+    for d, _ in golden.iterrows():
+        print(f"  ✦  {d.strftime('%Y-%m-%d')}")
+    print(f"Death Crosses detected  : {len(death)}")
+    for d, _ in death.iterrows():
+        print(f"  ▼  {d.strftime('%Y-%m-%d')}")
+    print(f"{'='*50}\n")
+
+    plot_chart(df, golden, death, TICKER, SHORT_WINDOW, LONG_WINDOW)
